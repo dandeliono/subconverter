@@ -1,8 +1,10 @@
 #include <algorithm>
-#include <iostream>
-#include <numeric>
+#include <array>
 #include <cmath>
 #include <climits>
+#include <cstdlib>
+#include <iostream>
+#include <numeric>
 
 #include "config/regmatch.h"
 #include "generator/config/subexport.h"
