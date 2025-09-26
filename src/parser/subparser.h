@@ -140,8 +140,15 @@ void vlessConstruct(
         const std::string &xtls,
         const std::string &public_key,
         const std::string &short_id,
-        tribool tfo,
-        tribool scv,
+        const std::string &network,
+        const std::string &host,
+        const std::string &edge,
+        const std::string &path,
+        const std::string &packet_encoding,
+        bool tls_secure,
+        tribool udp = tribool(),
+        tribool tfo = tribool(),
+        tribool scv = tribool(),
         const std::string &underlying_proxy = ""
 );
 
