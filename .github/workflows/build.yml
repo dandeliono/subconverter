@@ -18,34 +18,61 @@ jobs:
         include:
           - arch: x86
             artifact: subconverter_linux32
-            os: ubuntu-latest
+            platform: linux/386
           - arch: amd64
             artifact: subconverter_linux64
-            os: ubuntu-latest
+            platform: linux/amd64
           - arch: armv7
             artifact: subconverter_armv7
-            os: ubuntu-24.04-arm
+            platform: linux/arm/v7
           - arch: aarch64
             artifact: subconverter_aarch64
-            os: ubuntu-24.04-arm
-    runs-on: ${{ matrix.os }}
+            platform: linux/arm64
+    runs-on: ubuntu-latest
     name: Linux ${{ matrix.arch }} Build
     steps:
     - name: Checkout base
       uses: actions/checkout@v4
-    - name: Add commit id into version
-      if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      run: SHA=$(git rev-parse --short HEAD) && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h
-    - name: Build
-      run: docker run --rm -v $GITHUB_WORKSPACE:/root/workdir multiarch/alpine:${{ matrix.arch }}-latest-stable /bin/sh -c "apk add bash git nodejs npm && cd /root/workdir && chmod +x scripts/build.alpine.release.sh && bash scripts/build.alpine.release.sh"
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Prepare build metadata
+      run: |
+        if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+          echo "BUILD_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        fi
+    - name: Build via Dockerfile
+      run: |
+        set -eux
+        BUILD_ARGS=""
+        if [ -n "${BUILD_SHA:-}" ]; then
+          BUILD_ARGS="--build-arg SHA=${BUILD_SHA}"
+        fi
+        docker buildx build \
+          --load \
+          --platform ${{ matrix.platform }} \
+          $BUILD_ARGS \
+          -t subconverter-build:${{ matrix.arch }} \
+          -f scripts/Dockerfile .
+    - name: Extract build artifact
+      run: |
+        set -eux
+        rm -rf artifact
+        mkdir -p artifact
+        container_id=$(docker create subconverter-build:${{ matrix.arch }})
+        docker cp "$container_id":/base artifact/
+        mv artifact/base artifact/subconverter
+        docker cp "$container_id":/usr/bin/subconverter artifact/subconverter/
+        docker rm "$container_id"
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact }}
-        path: subconverter/
+        path: artifact/subconverter
     - name: Package Release
       if: ${{ github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/') }}
-      run: tar czf ${{ matrix.artifact }}.tar.gz subconverter
+      run: tar czf ${{ matrix.artifact }}.tar.gz -C artifact subconverter
     - name: Draft Release
       if: ${{ github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/') }}
       uses: softprops/action-gh-release@v2
