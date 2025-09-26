@@ -1,8 +1,10 @@
 #include <algorithm>
-#include <iostream>
-#include <numeric>
+#include <array>
 #include <cmath>
 #include <climits>
+#include <cstdlib>
+#include <iostream>
+#include <numeric>
 
 #include "config/regmatch.h"
 #include "generator/config/subexport.h"
@@ -611,17 +613,66 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
             break;
         case ProxyType::VLESS:
             singleproxy["type"] = "vless";
-            singleproxy["tls"] = true;
-            if (udp)
+            singleproxy["tls"] = x.TLSSecure;
+            if (!x.PacketEncoding.empty())
+                singleproxy["packet-encoding"] = x.PacketEncoding;
+            else if (udp)
                 singleproxy["packet-encoding"] = "xudp";
             if (!x.UUID.empty())
                 singleproxy["uuid"] = x.UUID;
             if (!x.SNI.empty())
                 singleproxy["servername"] = x.SNI;
+            if (!x.TransferProtocol.empty() && x.TransferProtocol != "tcp")
+            {
+                singleproxy["network"] = x.TransferProtocol;
+                switch (hash_(x.TransferProtocol))
+                {
+                case "ws"_hash:
+                    if (ext.clash_new_field_name)
+                    {
+                        singleproxy["ws-opts"]["path"] = x.Path;
+                        if (!x.Host.empty())
+                            singleproxy["ws-opts"]["headers"]["Host"] = x.Host;
+                        if (!x.Edge.empty())
+                            singleproxy["ws-opts"]["headers"]["Edge"] = x.Edge;
+                    }
+                    else
+                    {
+                        singleproxy["ws-path"] = x.Path;
+                        if (!x.Host.empty())
+                            singleproxy["ws-headers"]["Host"] = x.Host;
+                        if (!x.Edge.empty())
+                            singleproxy["ws-headers"]["Edge"] = x.Edge;
+                    }
+                    break;
+                case "http"_hash:
+                    singleproxy["http-opts"]["method"] = "GET";
+                    singleproxy["http-opts"]["path"].push_back(x.Path);
+                    if (!x.Host.empty())
+                        singleproxy["http-opts"]["headers"]["Host"].push_back(x.Host);
+                    if (!x.Edge.empty())
+                        singleproxy["http-opts"]["headers"]["Edge"].push_back(x.Edge);
+                    break;
+                case "h2"_hash:
+                    singleproxy["h2-opts"]["path"] = x.Path;
+                    if (!x.Host.empty())
+                        singleproxy["h2-opts"]["host"].push_back(x.Host);
+                    break;
+                case "grpc"_hash:
+                    if (!x.Path.empty())
+                        singleproxy["grpc-opts"]["grpc-service-name"] = x.Path;
+                    break;
+                default:
+                    break;
+                }
+            }
             if (!x.Alpn.empty())
                 singleproxy["alpn"] = x.Alpn;
             if (!x.Fingerprint.empty())
+            {
                 singleproxy["fingerprint"] = x.Fingerprint;
+                singleproxy["client-fingerprint"] = x.Fingerprint;
+            }
             if (x.XTLS == 2) {
                 singleproxy["flow"] = "xtls-rprx-vision";
             } else if (!x.Flow.empty()) {
@@ -630,7 +681,8 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
             if (!x.PublicKey.empty() && !x.ShortID.empty()) {
                 singleproxy["reality-opts"]["public-key"] = x.PublicKey;
                 singleproxy["reality-opts"]["short-id"] = x.ShortID;
-                singleproxy["client-fingerprint"] = "random";
+                if (x.Fingerprint.empty())
+                    singleproxy["client-fingerprint"] = "random";
             }
             if (!scv.is_undef())
                 singleproxy["skip-cert-verify"] = scv.get();
@@ -2620,7 +2672,10 @@ void proxyToSingBox(std::vector<Proxy> &nodes, rapidjson::Document &json, std::v
             case ProxyType::VLESS:
             {
                 addSingBoxCommonMembers(proxy, x, "vless", allocator);
-                proxy.AddMember("packet_encoding", "xudp", allocator);
+                if (!x.PacketEncoding.empty())
+                    proxy.AddMember("packet_encoding", rapidjson::StringRef(x.PacketEncoding.c_str()), allocator);
+                else
+                    proxy.AddMember("packet_encoding", "xudp", allocator);
 
                 if (!x.UUID.empty())
                     proxy.AddMember("uuid", rapidjson::StringRef(x.UUID.c_str()), allocator);
@@ -2633,9 +2688,13 @@ void proxyToSingBox(std::vector<Proxy> &nodes, rapidjson::Document &json, std::v
                 } else if (!x.Flow.empty()) {
                     proxy.AddMember("flow", rapidjson::StringRef(x.Flow.c_str()), allocator);
                 }
+
+                auto transport = buildSingBoxTransport(x, allocator);
+                if (!transport.ObjectEmpty())
+                    proxy.AddMember("transport", transport, allocator);
                 // TLS 配置
                 rapidjson::Value tls(rapidjson::kObjectType);
-                tls.AddMember("enabled", true, allocator);
+                tls.AddMember("enabled", x.TLSSecure || !x.PublicKey.empty() || !x.ShortID.empty(), allocator);
 
                 if (!scv.is_undef())
                     tls.AddMember("insecure", scv.get(), allocator);
@@ -2658,9 +2717,14 @@ void proxyToSingBox(std::vector<Proxy> &nodes, rapidjson::Document &json, std::v
                     tls.AddMember("reality", reality, allocator);
 
                     rapidjson::Value utls(rapidjson::kObjectType);
-                    utls.AddMember("enable",true,allocator);
-                    std::array<std::string, 6> fingerprints = {"chrome", "firefox", "safari", "ios", "edge", "qq"};
-                    utls.AddMember("fingerprint", rapidjson::Value(fingerprints[rand() % fingerprints.size()].c_str(), allocator), allocator);
+                    utls.AddMember("enable", true, allocator);
+                    if (!x.Fingerprint.empty())
+                        utls.AddMember("fingerprint", rapidjson::StringRef(x.Fingerprint.c_str()), allocator);
+                    else
+                    {
+                        std::array<std::string, 6> fingerprints = {"chrome", "firefox", "safari", "ios", "edge", "qq"};
+                        utls.AddMember("fingerprint", rapidjson::Value(fingerprints[rand() % fingerprints.size()].c_str(), allocator), allocator);
+                    }
                     tls.AddMember("utls", utls, allocator);
                 }
 
@@ -2690,14 +2754,17 @@ void proxyToSingBox(std::vector<Proxy> &nodes, rapidjson::Document &json, std::v
         }
         if (x.TLSSecure)
         {
-            rapidjson::Value tls(rapidjson::kObjectType);
-            tls.AddMember("enabled", true, allocator);
-            if (!x.ServerName.empty())
-                tls.AddMember("server_name", rapidjson::StringRef(x.ServerName.c_str()), allocator);
-            else if (!x.Host.empty())
-                tls.AddMember("server_name", rapidjson::StringRef(x.Host.c_str()), allocator);
-            tls.AddMember("insecure", buildBooleanValue(scv), allocator);
-            proxy.AddMember("tls", tls, allocator);
+            if (proxy.FindMember("tls") == proxy.MemberEnd())
+            {
+                rapidjson::Value tls(rapidjson::kObjectType);
+                tls.AddMember("enabled", true, allocator);
+                if (!x.ServerName.empty())
+                    tls.AddMember("server_name", rapidjson::StringRef(x.ServerName.c_str()), allocator);
+                else if (!x.Host.empty())
+                    tls.AddMember("server_name", rapidjson::StringRef(x.Host.c_str()), allocator);
+                tls.AddMember("insecure", buildBooleanValue(scv), allocator);
+                proxy.AddMember("tls", tls, allocator);
+            }
         }
         if (!udp.is_undef() && !udp)
         {

@@ -4,7 +4,7 @@ ARG THREADS="4"
 ARG SHA=""
 
 # build minimized
-WORKDIR /
+WORKDIR /tmp
 RUN set -xe && \
     apk add --no-cache --virtual .build-tools git g++ build-base linux-headers cmake python3 && \
     apk add --no-cache --virtual .build-deps curl-dev rapidjson-dev pcre2-dev yaml-cpp-dev && \
@@ -34,10 +34,12 @@ RUN set -xe && \
     cd toml11 && \
     cmake -DCMAKE_CXX_STANDARD=11 . && \
     make install -j $THREADS && \
-    cd .. && \
-    git clone https://github.com/metacubex/subconverter --depth=1 && \
-    cd subconverter && \
-    [ -n "$SHA" ] && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h;\
+    cd ..
+
+WORKDIR /src
+COPY . .
+RUN set -xe && \
+    if [ -n "$SHA" ]; then sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h; fi && \
     python3 -m ensurepip && \
     python3 -m pip install gitpython && \
     python3 scripts/update_rules.py -c scripts/rules_config.conf && \
@@ -50,8 +52,8 @@ LABEL maintainer="metacubex.official@gmail.com"
 
 RUN apk add --no-cache --virtual subconverter-deps pcre2 libcurl yaml-cpp
 
-COPY --from=builder /subconverter/subconverter /usr/bin/
-COPY --from=builder /subconverter/base /base/
+COPY --from=builder /src/subconverter /usr/bin/
+COPY --from=builder /src/base /base/
 
 ENV TZ=Africa/Abidjan
 RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
